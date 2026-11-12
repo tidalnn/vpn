@@ -1,0 +1,48 @@
+http:
+  routers:
+    dashboard:
+      rule: Host(`vpn.docker.localhost`) && (PathPrefix(`/router/api`) || PathPrefix(`/router/dashboard`))
+      entryPoints:
+        - websecure
+      service: api@internal
+      middlewares:
+        - dashboard_auth@file
+      tls:
+        certResolver: lets
+
+    proxy_dashboard:
+      rule: Host(`vpn.docker.localhost`) && PathPrefix(`/proxy/dashboard`)
+      entryPoints:
+        - websecure
+      service: proxy_dashboard@docker
+      tls:
+        certResolver: lets
+
+    proxy_subscribe:
+      rule: Host(`vpn.docker.localhost`) && PathPrefix(`/proxy/subscribe`)
+      entryPoints:
+        - websecure
+      service: proxy_subscribe@docker
+      tls:
+        certResolver: lets
+
+  middlewares:
+    dashboard_auth:
+      basicAuth:
+        users:
+          - username:password_hash
+
+tcp:
+  routers:
+    proxy_vless:
+      rule: HostSNI(`*.example.com`)
+      service: proxy_vless@docker
+      entryPoints:
+        - websecure
+      tls:
+        passthrough: true
+
+  serversTransports:
+    proxy_v2:
+      proxyProtocol:
+        version: 2

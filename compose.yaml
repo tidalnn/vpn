@@ -1,0 +1,142 @@
+services:
+  traefik:
+    image: traefik:v3.7
+    container_name: traefik
+
+    ports:
+      - target: 80
+        published: 80
+        mode: host
+      - target: 443
+        published: 443
+        mode: host
+    networks:
+      - server_network
+
+    restart: unless-stopped
+
+    environment:
+      CF_DNS_API_TOKEN: ${CF_TOKEN}
+    volumes:
+      # System
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /etc/localtime:/etc/localtime:ro
+      # Config
+      - ./traefik.yaml:/etc/traefik/traefik.yaml:ro
+      - ./dynamic.yaml:/etc/traefik/dynamic.yaml:ro
+      # ACME
+      - ./certs.json:/etc/traefik/certs.json
+      # Logging
+      - ./logs/traefik:/var/log/traefik
+
+    security_opt:
+      - no-new-privileges:true
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+  logrotate:
+    image: vegardit/traefik-logrotate:latest
+    container_name: logrotate
+
+    restart: unless-stopped
+    depends_on:
+      traefik:
+        condition: service_started
+
+    environment:
+      TZ: UTC
+      LOGROTATE_LOGS: /var/log/traefik/access.log
+      LOGROTATE_TRIGGER_INTERVAL: daily
+      LOGROTATE_TRIGGER_SIZE: 50M
+      LOGROTATE_MAX_BACKUPS: 5
+      LOGROTATE_START_INDEX: 1
+      LOGROTATE_FILE_MODE: 0644
+      LOGROTATE_FILE_USER: root
+      LOGROTATE_FILE_GROUP: root
+      CRON_SCHEDULE: "* * * * *"
+      CRON_LOG_LEVEL: 8
+      TRAEFIK_CONTAINER_ID_COMMAND: docker ps --no-trunc --quiet --filter label=org.opencontainers.image.title=Traefik
+    volumes:
+      # System
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+      - /etc/localtime:/etc/localtime:ro
+      # Logging
+      - ./logs/traefik:/var/log/traefik:rw
+
+  database:
+    image: postgres:18-alpine3.23
+    container_name: database
+
+    networks:
+      - server_network
+
+    restart: unless-stopped
+
+    environment:
+      TZ: UTC
+      PGTZ: UTC
+      PGDATA: /var/lib/postgresql/18/docker
+      POSTGRES_DB: ${DB_CTLG}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+    volumes:
+      - ./data:/var/lib/postgresql/18/docker
+
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+      memlock:
+        soft: -1
+        hard: -1
+    shm_size: 256m
+
+  proxy:
+    image: ghcr.io/mhsanaei/3x-ui:v3.6.0
+    container_name: proxy
+
+    networks:
+      - server_network
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_started
+        restart: true
+
+    environment:
+      XUI_PORT: 1101
+      XUI_INIT_WEB_BASE_PATH: /proxy/dashboard
+      XUI_ENABLE_FAIL2BAN: false
+      XUI_SKIP_HSTS: true
+      XUI_DB_TYPE: postgres
+      XUI_DB_DSN: 'postgres://${DB_USER}:${DB_PASS}@database:5432/${DB_CTLG}?sslmode=disable'
+    volumes:
+      - ./logs/3xui:/var/log/x-ui
+      - /etc/localtime:/etc/localtime:ro
+
+    tty: true
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+      nproc:
+        soft: 4096
+        hard: 4096
+
+    labels:
+      traefik.enable: true
+      traefik.http.services.proxy_dashboard.loadbalancer.server.port: 1101
+      traefik.http.services.proxy_subscribe.loadbalancer.server.port: 1102
+      traefik.tcp.services.proxy_vless.loadbalancer.server.port: 1201
+      traefik.tcp.services.proxy_vless.loadbalancer.serversTransport: proxy_v2@file
+
+networks:
+  server_network:
+    name: server_network
+    driver: bridge

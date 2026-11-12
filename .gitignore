@@ -1,0 +1,7 @@
+/data
+/logs
+
+.env
+certs.json
+traefik.yaml
+dynamic.yaml
